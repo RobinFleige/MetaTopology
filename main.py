@@ -70,9 +70,9 @@ f_3p3d_circle = [f_3p3d_circle_x, f_3p3d_circle_y, f_3p3d_circle_z]
 
 
 class VectorField:
-    DETAIL = 5
+    DETAIL = 2
     DELTA = 1/DETAIL
-    VECTOR_SIZE_THRESHOLD = 0.000001
+    VECTOR_SIZE_THRESHOLD = 0.0001
     MIN = -4
     MAX = 4
 
@@ -226,84 +226,69 @@ class VectorField:
             else:
                 return []
 
-    def crit_line(self, both, mins, maxs):
-        start = self.critical_points(both, mins, maxs, 0)
-        start_id = []
-        for i in range(self.dimensions):
-            start_id.append(0)
-        nexts = []
-        ids = []
-        ids.append(start_id)
-        nexts.append([start[0], start_id])
+    def fff_step(self, point, direction):
+        fff_cond = float(self.fff_cond(point))
+        fff = self.fff(point, self.parameter_dimensions - 1)
+
+        sum = abs(fff_cond)
+        for i in range(len(fff)):
+            sum = sum + abs(fff[i])
+
+        if sum != 0:
+            fff_cond = fff_cond / sum
+            for i in range(len(fff)):
+                fff[i] = fff[i] / sum
+
+        next_point = point.copy()
+        next_point[self.parameter_dimensions - 1] = float(point[self.parameter_dimensions - 1] + (fff_cond / self.DETAIL) * pow(-1, direction))
+
+        for j in range(self.space_dimensions):
+            next_point[j + self.parameter_dimensions] = float(
+                next_point[j + self.parameter_dimensions] + (fff[j] / self.DETAIL) * pow(-1, direction))
+
+        next_both, next_mins, next_maxs = self.newton_step(next_point)
+        next_crit = self.critical_points(next_both, next_mins, next_maxs, 0)
+
+        return next_crit
+
+    def crit_line(self, start, start_at_bif):
         crits = []
+        nexts = []
+        if not start_at_bif:
+            crits.append(start)
+
+        for i in range(2):
+            temp = self.fff_step(start, i)
+            if temp:
+                nexts.append([temp[0], i])
+
         while len(nexts) > 0:
-            crit = nexts[0]
-            crits.append(crit[0])
-            nexts.remove(crit)
+            current = nexts[0]
+            nexts.remove(current)
+            crits.append(current[0])
 
             in_range = True
-            for i in range(self.dimensions):
-                if crit[0][i] < self.MIN or crit[0][i] > self.MAX:
+            for i in range(self.space_dimensions+1):
+                if current[0][i] < self.MIN or current[0][i] > self.MAX:
                     in_range = False
 
             if in_range:
-                fff_cond = self.fff_cond(crit[0])
-                if abs(fff_cond) < self.VECTOR_SIZE_THRESHOLD:
-                    fff_cond = self.VECTOR_SIZE_THRESHOLD
-                #Only in one direction (last parameter)
-                i = self.parameter_dimensions-1
-                fff = self.fff(crit[0], i)
-
-                next_point = []
-                prev_point = []
-                next_point = next_point + crit[0]
-                prev_point = prev_point + crit[0]
-
-                next_point[i] = float(next_point[i] + (fff_cond/self.DETAIL))
-                prev_point[i] = float(prev_point[i] - (fff_cond/self.DETAIL))
-
-                for j in range(self.space_dimensions):
-                    next_point[j+self.parameter_dimensions] = float(next_point[j+self.parameter_dimensions] + (fff[j]/self.DETAIL))
-                    prev_point[j+self.parameter_dimensions] = float(prev_point[j+self.parameter_dimensions] - (fff[j]/self.DETAIL))
-
-                next_both, next_mins, next_maxs = self.newton_step(next_point)
-                prev_both, prev_mins, prev_maxs = self.newton_step(prev_point)
-                next_crit = self.critical_points(next_both, next_mins, next_maxs, 0)
-                prev_crit = self.critical_points(prev_both, prev_mins, prev_maxs, 0)
-
-                next_id = []
-                next_id = next_id + crit[1]
-                next_id[i] = next_id[i]+1
-                prev_id = []
-                prev_id = prev_id + crit[1]
-                prev_id[i] = prev_id[i]-1
-
-                if next_crit != [] and next_id not in ids:
-                    nexts.append([next_crit[0], next_id])
-                    ids.append(next_id)
-                if prev_crit != [] and prev_id not in ids:
-                    nexts.append([prev_crit[0], prev_id])
-                    ids.append(prev_id)
+                temp = self.fff_step(current[0], current[1])
+                if temp:
+                    nexts.append([temp[0], current[1]])
 
         return crits
-
 
 
 vf = VectorField(f_2p2d_simple, 2, 2)
 m_vf = VectorField([vf.fff_cond, f_2p2d_simple_x, f_2p2d_simple_y], 1, 3)
 
-
-bifurcations = m_vf.crit_line([1.0], [-1.5, -0.5, 0.5], [-0.5, 0.5, 1.5])
+bifurcations = m_vf.crit_line([1.0, -1.0, 0.0, 1.0], False)
 crits = []
 print(len(bifurcations))
 for i in range(len(bifurcations)):
     print(i)
-    crits = crits + vf.crit_line([bifurcations[i][0], bifurcations[i][1]], [bifurcations[i][2]-0.5, bifurcations[i][3]-0.5], [bifurcations[i][2]+0.5, bifurcations[i][3]+0.5])
-
-
-#mm_vf = VectorField([m_vf.fff_cond, vf.fff_cond, f_3p3d_circle_x, f_3p3d_circle_y, f_3p3d_circle_z], 1, 5)
-#print(mm_vf.fff_cond((0.1, 0.2, 0.3, 0.4, 0.5, 0.6)))
-
+    crits = crits + vf.crit_line(bifurcations[i], True)
 
 points = vtkPoints()
 vertices = vtkCellArray()
