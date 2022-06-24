@@ -1,11 +1,6 @@
-import numpy as np
 import sys
+import math
 from jax import grad, jacfwd
-from sympy import *
-from scipy.optimize import fsolve
-import vtkmodules.vtkInteractionStyle
-import vtkmodules.vtkRenderingOpenGL2
-from vtkmodules.vtkCommonColor import vtkNamedColors
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
 from vtkmodules.vtkCommonCore import vtkPoints, vtkUnsignedCharArray
 from vtkmodules.vtkCommonDataModel import (
@@ -51,9 +46,22 @@ def f_2p2d_double_y(vars):
 f_2p2d_double = [f_2p2d_double_x, f_2p2d_double_y]
 
 
+def f_2p2d_circle_x(vars):
+    s, t, x, y = vars
+    return x**2+s**2+t**2-1
+
+
+def f_2p2d_circle_y(vars):
+    s, t, x, y = vars
+    return y
+
+
+f_2p2d_circle = [f_2p2d_circle_x, f_2p2d_circle_y]
+
+
 def f_3p3d_circle_x(vars):
     s, t, u, x, y, z = vars
-    return x**2+s**2+t**2+u*2-1
+    return x**2+s**2+t**2+u**2-1
 
 
 def f_3p3d_circle_y(vars):
@@ -70,9 +78,9 @@ f_3p3d_circle = [f_3p3d_circle_x, f_3p3d_circle_y, f_3p3d_circle_z]
 
 
 class VectorField:
-    DETAIL = 2
+    DETAIL = 3
     DELTA = 1/DETAIL
-    VECTOR_SIZE_THRESHOLD = 0.0001
+    VECTOR_SIZE_THRESHOLD = 0.000000000001
     MIN = -4
     MAX = 4
 
@@ -158,7 +166,7 @@ class VectorField:
         value = 0
         for i in range(self.space_dimensions):
             value += vector[i]**2
-        return sqrt(value)
+        return math.sqrt(value)
 
     def newton_step(self, point):
         both = []
@@ -171,9 +179,9 @@ class VectorField:
             maxs.append(point[i+self.parameter_dimensions]+self.DELTA)
         return both, mins, maxs
 
-    def critical_points(self, both, mins, maxs, recursion_depth):
+    def critical_points(self, both, mins, maxs, recursion_depth, min_recursion_depth):
         center = both + [(mins[i]+maxs[i])/2 for i in range(self.space_dimensions)]
-        if self.vector_length([self.base_function[i](center) for i in range(self.space_dimensions)]) < self.VECTOR_SIZE_THRESHOLD or recursion_depth == sys.getrecursionlimit()-20:
+        if (self.vector_length([self.base_function[i](center) for i in range(self.space_dimensions)]) < self.VECTOR_SIZE_THRESHOLD and min_recursion_depth <= 0) or recursion_depth == sys.getrecursionlimit()-20:
             return [center]
         else:
 
@@ -203,7 +211,7 @@ class VectorField:
                 if positive_counts[i] == 0 or positive_counts[i] == len(corners):
                     contains_crit = False
 
-            if contains_crit:
+            if contains_crit or min_recursion_depth > 0:
                 new_mins = []
                 new_maxs = []
                 for i in range(pow(2, self.space_dimensions)):
@@ -221,7 +229,7 @@ class VectorField:
 
                 crits = []
                 for i in range(len(new_mins)):
-                    crits = crits + self.critical_points(both, new_mins[i], new_maxs[i], recursion_depth + 1)
+                    crits = crits + self.critical_points(both, new_mins[i], new_maxs[i], recursion_depth + 1, min_recursion_depth - 1)
                 return crits
             else:
                 return []
@@ -247,7 +255,7 @@ class VectorField:
                 next_point[j + self.parameter_dimensions] + (fff[j] / self.DETAIL) * pow(-1, direction))
 
         next_both, next_mins, next_maxs = self.newton_step(next_point)
-        next_crit = self.critical_points(next_both, next_mins, next_maxs, 0)
+        next_crit = self.critical_points(next_both, next_mins, next_maxs, 0, 0)
 
         return next_crit
 
@@ -280,59 +288,71 @@ class VectorField:
         return crits
 
 
-vf = VectorField(f_2p2d_simple, 2, 2)
-m_vf = VectorField([vf.fff_cond, f_2p2d_simple_x, f_2p2d_simple_y], 1, 3)
+def render(crits, bifurcations):
+    points = vtkPoints()
+    vertices = vtkCellArray()
+    polydata = vtkPolyData()
+    colors = vtkUnsignedCharArray()
+    colors.SetNumberOfComponents(4)
+    colors.SetNumberOfTuples(len(crits) + len(bifurcations))
 
-bifurcations = m_vf.crit_line([1.0, -1.0, 0.0, 1.0], False)
+    for i in range(len(crits)):
+        rgba = [255, 0, 0, 255]
+        colors.InsertTuple(i, rgba)
+        p = [crits[i][0], crits[i][1], crits[i][2]]
+        pid = points.InsertNextPoint(p)
+        vertices.InsertNextCell(1)
+        vertices.InsertCellPoint(pid)
+
+    for i in range(len(bifurcations)):
+        rgba = [0, 255, 0, 255]
+        colors.InsertTuple(i + len(crits), rgba)
+        p = [bifurcations[i][0], bifurcations[i][1], bifurcations[i][2]]
+        pid = points.InsertNextPoint(p)
+        vertices.InsertNextCell(1)
+        vertices.InsertCellPoint(pid)
+
+    polydata.SetPoints(points)
+    polydata.SetVerts(vertices)
+    polydata.GetCellData().SetScalars(colors);
+    mapper = vtkPolyDataMapper()
+    mapper.SetInputData(polydata)
+    actor = vtkActor()
+    actor.SetMapper(mapper)
+    actor.GetProperty().SetPointSize(10)
+    renderer = vtkRenderer()
+    renderer.AddActor(actor)
+    renderWindow = vtkRenderWindow()
+    renderWindow.AddRenderer(renderer)
+    renderer.SetBackground([0, 0, 255])
+    interactor = vtkRenderWindowInteractor()
+    interactor.SetRenderWindow(renderWindow)
+    style = vtkInteractorStyleTrackballCamera()
+    interactor.SetInteractorStyle(style)
+    renderWindow.Render()
+    interactor.Start()
+
+#Start somewhere to extract highest bifurcation
+#vf = VectorField(f_2p2d_simple, 2, 2)
+#m_vf = VectorField([vf.fff_cond, f_2p2d_simple_x, f_2p2d_simple_y], 1, 3)
+
+#start = vf.critical_points([1,1],[vf.MIN,vf.MIN],[vf.MAX,vf.MAX],0,5)
+#print(start)
+
+#Render Bifurcations and Crits from Bifurcation
+vf = VectorField(f_2p2d_circle, 2, 2)
+m_vf = VectorField([vf.fff_cond, f_2p2d_circle_x, f_2p2d_circle_y], 1, 3)
+
+bifurcations = m_vf.crit_line([1.0, 0.0, 0.0, 0.0], False)
 crits = []
 print(len(bifurcations))
 for i in range(len(bifurcations)):
     print(i)
     crits = crits + vf.crit_line(bifurcations[i], True)
 
-points = vtkPoints()
-vertices = vtkCellArray()
-polydata = vtkPolyData()
-colors = vtkUnsignedCharArray()
-colors.SetNumberOfComponents(4)
-colors.SetNumberOfTuples(len(crits)+len(bifurcations))
-
-for i in range(len(crits)):
-    rgba = [255, 0, 0, 255]
-    colors.InsertTuple(i, rgba)
-    p = [crits[i][0], crits[i][1], crits[i][2]]
-    pid = points.InsertNextPoint(p)
-    vertices.InsertNextCell(1)
-    vertices.InsertCellPoint(pid)
-
-for i in range(len(bifurcations)):
-    rgba = [0, 255, 0, 255]
-    colors.InsertTuple(i+len(crits), rgba)
-    p = [bifurcations[i][0], bifurcations[i][1], bifurcations[i][2]]
-    pid = points.InsertNextPoint(p)
-    vertices.InsertNextCell(1)
-    vertices.InsertCellPoint(pid)
+#render(crits, bifurcations)
 
 
-polydata.SetPoints(points)
-polydata.SetVerts(vertices)
-polydata.GetCellData().SetScalars(colors);
-mapper = vtkPolyDataMapper()
-mapper.SetInputData(polydata)
-actor = vtkActor()
-actor.SetMapper(mapper)
-actor.GetProperty().SetPointSize(10)
-renderer = vtkRenderer()
-renderer.AddActor(actor)
-renderWindow = vtkRenderWindow()
-renderWindow.AddRenderer(renderer)
-renderer.SetBackground([0, 0, 255])
-interactor = vtkRenderWindowInteractor()
-interactor.SetRenderWindow(renderWindow)
-style = vtkInteractorStyleTrackballCamera()
-interactor.SetInteractorStyle(style)
-renderWindow.Render()
-interactor.Start()
 
 
 
